@@ -49,8 +49,7 @@ func TestProductStore(t *testing.T) {
 	}
 
 	// Write test products to file
-	encoder := json.NewEncoder(file)
-	if err := encoder.Encode(testProducts); err != nil {
+	if err := json.NewEncoder(file).Encode(testProducts); err != nil {
 		t.Fatalf("Failed to write test data: %v", err)
 	}
 	file.Close()
@@ -60,7 +59,7 @@ func TestProductStore(t *testing.T) {
 
 	// Test LoadProducts
 	t.Run("LoadProducts", func(t *testing.T) {
-		err := store.LoadProducts(tempDir)
+		err := store.LoadProducts(testFile)
 		if err != nil {
 			t.Errorf("LoadProducts failed: %v", err)
 		}
@@ -78,7 +77,7 @@ func TestProductStore(t *testing.T) {
 		if err != nil {
 			t.Errorf("GetProduct failed: %v", err)
 		}
-		if product.ID != "prod-1" || product.Name != "Test Product 1" {
+		if product == nil || product.ID != "prod-1" || product.Name != "Test Product 1" {
 			t.Errorf("Got wrong product: %+v", product)
 		}
 

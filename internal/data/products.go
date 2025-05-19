@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 
 	"github.com/ravibandhu/oolio-food-ordering/internal/models"
@@ -24,8 +23,8 @@ func NewProductStore() *ProductStore {
 	}
 }
 
-// LoadProducts reads product data from JSON files in the specified directory
-func (s *ProductStore) LoadProducts(dir string) error {
+// LoadProducts reads product data from a JSON file
+func (s *ProductStore) LoadProducts(filePath string) error {
 	// Lock for writing
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -33,17 +32,9 @@ func (s *ProductStore) LoadProducts(dir string) error {
 	// Clear existing products
 	s.products = make(map[string]*models.Product)
 
-	// Get all JSON files in the directory
-	files, err := filepath.Glob(filepath.Join(dir, "*.json"))
-	if err != nil {
-		return fmt.Errorf("error finding product files: %w", err)
-	}
-
-	// Process each file
-	for _, file := range files {
-		if err := s.loadProductFile(file); err != nil {
-			return fmt.Errorf("error loading file %s: %w", file, err)
-		}
+	// Open and read the file
+	if err := s.loadProductFile(filePath); err != nil {
+		return fmt.Errorf("error loading file %s: %w", filePath, err)
 	}
 
 	return nil
