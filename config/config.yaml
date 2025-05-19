@@ -1,0 +1,13 @@
+server:
+  port: ":8080"
+  readtimeout: "15s"
+  writetimeout: "15s"
+  idletimeout: "60s"
+
+files:
+  productsfile: "./data/products.json"
+  couponsdir: "./data/coupons"
+
+logging:
+  level: "info"
+  format: "json" 
