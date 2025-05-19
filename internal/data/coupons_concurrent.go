@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // CouponStoreConcurrent struct to hold the loaded coupon codes.
@@ -38,277 +40,294 @@ func NewCouponStoreConcurrent() *CouponStoreConcurrent {
 func CouponStoreConcurrentInstance(dir string) (*CouponStoreConcurrent, error) {
 	once.Do(func() {
 		instance = NewCouponStoreConcurrent()
-		loadDir = dir
+		loadDir = dir // Store the directory used for loading
 		loadErr = instance.LoadAndFindValidCoupons(dir)
 		if loadErr == nil {
 			loaded = true
 		}
 	})
 
-	if loaded && loadDir != dir {
-		fmt.Println("Warning: CouponStore already loaded with a different directory.")
+    if loaded && loadDir != dir {
+		fmt.Printf("Warning: CouponStore already loaded with directory '%s'. Requested directory '%s' is different.\n", loadDir, dir)
 	}
 
 	return instance, loadErr
 }
 
-// sortFile performs external sorting on a file using the system's `sort` command.
-func sortFile(inputPath, outputPath string) error {
-	cmd := exec.Command("sort", inputPath, "-o", outputPath)
-	err := cmd.Run()
-	if err != nil {
-		return fmt.Errorf("error sorting %s: %w", inputPath, err)
-	}
-	return nil
-}
-
-// extractAndSort reads coupon codes from a file, writes them to a temporary file, sorts it, and returns the sorted file path.
+// extractAndSort reads coupon codes from a file, preprocesses them (trimming, filtering empty),
+// and pipes them to the system's `sort` command, which writes to a sorted output file.
 func extractAndSort(inputPath, tempDir string, fileIndex int) (string, error) {
 	outputPath := filepath.Join(tempDir, fmt.Sprintf("sorted_coupons_%d.txt", fileIndex))
-	tempExtractPath := filepath.Join(tempDir, fmt.Sprintf("extracted_coupons_%d.txt", fileIndex))
 
-	inFile, err := os.Open(inputPath)
+	// Setup the sort command to read from stdin and write to outputPath
+	cmd := exec.Command("sort", "-o", outputPath)
+	cmd.Env = append(os.Environ(), "LC_ALL=C") // Use C locale for faster sorting
+
+	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
-		return "", fmt.Errorf("error opening input file %s: %w", inputPath, err)
+		return "", fmt.Errorf("error creating stdin pipe for sort (%s): %w", inputPath, err)
 	}
-	defer inFile.Close()
 
-	outFile, err := os.Create(tempExtractPath)
-	if err != nil {
-		return "", fmt.Errorf("error creating temporary file %s: %w", tempExtractPath, err)
+	// Start the sort command. It will block waiting for input on stdinPipe.
+	if err := cmd.Start(); err != nil {
+		stdinPipe.Close() // Close pipe if command fails to start
+		return "", fmt.Errorf("error starting sort command for %s: %w", inputPath, err)
 	}
-	defer outFile.Close()
 
-	var reader *bufio.Reader
-	var readCloser io.ReadCloser // to hold either the file or the gzip reader
-	readCloser = inFile          // default to the file
-	defer readCloser.Close()    // ensure closing
+	// Use an errgroup to manage the goroutine writing to stdin and waiting for cmd.
+	// The group's context will be cancelled if any of its goroutines return an error.
+	var eg errgroup.Group
 
-	if strings.HasSuffix(inputPath, ".gz") {
-		gzReader, err := gzip.NewReader(inFile)
+	// Goroutine to open the input file, preprocess lines, and write to sort's stdin.
+	eg.Go(func() error {
+		// IMPORTANT: Ensure stdinPipe is closed when this goroutine finishes,
+		// either successfully or due to an error. This signals EOF to the sort command.
+		defer stdinPipe.Close()
+
+		inFile, err := os.Open(inputPath)
 		if err != nil {
-			return "", fmt.Errorf("error creating gzip reader for %s: %w", inputPath, err)
+			return fmt.Errorf("error opening input file %s: %w", inputPath, err)
 		}
-		readCloser = gzReader // replace with gzip reader
-		reader = bufio.NewReader(gzReader)
-	} else {
-		reader = bufio.NewReader(inFile)
-	}
+		defer inFile.Close()
 
-	// Determine the number of goroutines to use
-	numCPU := getNumCPU()
-	var wg sync.WaitGroup
-	errChan := make(chan error, numCPU) // Channel for errors from goroutines
-	linesChan := make(chan string, 1024)  // Buffered channel for sending lines
+		var currentReader io.Reader = inFile
+		if strings.HasSuffix(inputPath, ".gz") {
+			gzReader, err := gzip.NewReader(inFile) // gzip.NewReader handles BOM if present
+			if err != nil {
+				return fmt.Errorf("error creating gzip reader for %s: %w", inputPath, err)
+			}
+			defer gzReader.Close() // This closes the gzip stream, inFile is closed by its own defer
+			currentReader = gzReader
+		}
 
-	// Function to process a chunk of lines
-	processLines := func() {
-		defer wg.Done()
-		for line := range linesChan {
-			if strings.TrimSpace(line) != "" {
-				_, err := outFile.WriteString(line + "\n")
-				if err != nil {
-					errChan <- fmt.Errorf("error writing to temporary file %s: %w", tempExtractPath, err)
-					return // Exit the goroutine on error
+		// Use bufio.Writer for efficient writes to the pipe.
+		writer := bufio.NewWriter(stdinPipe)
+		// Use bufio.Scanner for efficient reads from the file/gzReader.
+		scanner := bufio.NewScanner(currentReader)
+        // Increase buffer size for scanner if lines can be very long (default is 64KB)
+        // const maxCapacity = 1024 * 1024 // 1 MB for example
+        // buf := make([]byte, maxCapacity)
+        // scanner.Buffer(buf, maxCapacity)
+
+
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line != "" { // Filter out empty lines after trimming
+				if _, err := writer.WriteString(line + "\n"); err != nil {
+					// This error typically occurs if the sort command has exited prematurely.
+					return fmt.Errorf("error writing to sort stdin for %s: %w", inputPath, err)
 				}
 			}
 		}
+
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("error scanning input file %s: %w", inputPath, err)
+		}
+
+		// Crucial: Flush any buffered data to the pipe.
+		if err := writer.Flush(); err != nil {
+			return fmt.Errorf("error flushing to sort stdin for %s: %w", inputPath, err)
+		}
+
+		return nil // Success for this goroutine
+	})
+
+	// Wait for the sort command to finish and capture its error.
+	cmdErr := cmd.Wait()
+
+	// Wait for the goroutine that writes to stdinPipe to finish.
+	// This will return the error from that goroutine, if any.
+	pipeErr := eg.Wait()
+
+	// Prioritize error from the piping goroutine as it might cause cmdErr.
+	if pipeErr != nil {
+		// If cmdErr is not nil, it might be a consequence of pipeErr (e.g., broken pipe).
+		// We log cmdErr for diagnostics but return pipeErr as the primary cause.
+		if cmdErr != nil {
+			// Consider logging cmdErr here if needed: fmt.Fprintf(os.Stderr, "Sort command also failed for %s: %v\n", inputPath, cmdErr)
+		}
+		return "", fmt.Errorf("error during preprocessing/piping for %s: %w", inputPath, pipeErr)
 	}
-
-	// Start worker goroutines
-	for i := 0; i < numCPU; i++ {
-		wg.Add(1)
-		go processLines()
-	}
-
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() {
-		line := scanner.Text()
-		linesChan <- line // Send line to the channel
-	}
-	close(linesChan) // Close the channel after all lines are sent
-
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("error reading input file %s: %w", inputPath, err)
-	}
-
-	wg.Wait() // Wait for all goroutines to finish
-
-	// Check for errors from goroutines
-	select {
-	case err := <-errChan:
-		return "", err // Return the first error encountered
-	default:
-		// No error
-	}
-
-	if err := sortFile(tempExtractPath, outputPath); err != nil {
-		return "", err
-	}
-
-	err = os.Remove(tempExtractPath) // Clean up the intermediate file.
-	if err != nil {
-		return "", fmt.Errorf("error removing temporary file %s: %w", tempExtractPath, err)
+	// If piping was successful, but sort command itself failed.
+	if cmdErr != nil {
+		return "", fmt.Errorf("sort command failed for %s: %w", inputPath, cmdErr)
 	}
 
 	return outputPath, nil
 }
 
+
 // findValidCoupons merges three sorted files and identifies coupons present in at least two of them.
+// This function remains largely the same as it's already quite efficient for sorted inputs.
 func findValidCoupons(sortedFile1, sortedFile2, sortedFile3 string) ([]string, error) {
-	files := [3]*os.File{nil, nil, nil}
-	readers := [3]*bufio.Reader{nil, nil, nil}
-	scanners := [3]*bufio.Scanner{nil, nil, nil}
-	currentCodes := [3]string{"", "", ""}
-	hasMore := [3]bool{true, true, true}
-	err := error(nil)
+    files := [3]*os.File{nil, nil, nil}
+    readers := [3]*bufio.Reader{nil, nil, nil}
+    scanners := [3]*bufio.Scanner{nil, nil, nil}
+    currentCodes := [3]string{"", "", ""} // Store current code from each file
+    hasMore := [3]bool{true, true, true} // Tracks if each file still has lines
+    var setupErr error
 
-	// Open files and create readers/scanners
-	files[0], err = os.Open(sortedFile1)
-	if err != nil {
-		return nil, fmt.Errorf("error opening sorted file %s: %w", sortedFile1, err)
-	}
-	defer files[0].Close()
-	readers[0] = bufio.NewReader(files[0])
-	scanners[0] = bufio.NewScanner(readers[0])
-	hasMore[0] = scanners[0].Scan()
-	if hasMore[0] {
-		currentCodes[0] = strings.TrimSpace(scanners[0].Text())
-	}
+    // Defer closing all files that are successfully opened
+    defer func() {
+        for i := 0; i < 3; i++ {
+            if files[i] != nil {
+                files[i].Close()
+            }
+        }
+    }()
 
-	files[1], err = os.Open(sortedFile2)
-	if err != nil {
-		return nil, fmt.Errorf("error opening sorted file %s: %w", sortedFile2, err)
-	}
-	defer files[1].Close()
-	readers[1] = bufio.NewReader(files[1])
-	scanners[1] = bufio.NewScanner(readers[1])
-	hasMore[1] = scanners[1].Scan()
-	if hasMore[1] {
-		currentCodes[1] = strings.TrimSpace(scanners[1].Text())
-	}
+    // Open files and initialize scanners
+    filePaths := [3]string{sortedFile1, sortedFile2, sortedFile3}
+    for i := 0; i < 3; i++ {
+        files[i], setupErr = os.Open(filePaths[i])
+        if setupErr != nil {
+            return nil, fmt.Errorf("error opening sorted file %s: %w", filePaths[i], setupErr)
+        }
+        readers[i] = bufio.NewReader(files[i])
+        scanners[i] = bufio.NewScanner(readers[i])
+        if scanners[i].Scan() {
+            currentCodes[i] = strings.TrimSpace(scanners[i].Text()) // Already trimmed during sort prep, but good for safety
+        } else {
+            hasMore[i] = false // File is empty or only had error
+            if err := scanners[i].Err(); err != nil {
+                 return nil, fmt.Errorf("error reading initial line from sorted file %d (%s): %w", i+1, filePaths[i], err)
+            }
+        }
+    }
 
-	files[2], err = os.Open(sortedFile3)
-	if err != nil {
-		return nil, fmt.Errorf("error opening sorted file %s: %w", sortedFile3, err)
-	}
-	defer files[2].Close()
-	readers[2] = bufio.NewReader(files[2])
-	scanners[2] = bufio.NewScanner(readers[2])
-	hasMore[2] = scanners[2].Scan()
-	if hasMore[2] {
-		currentCodes[2] = strings.TrimSpace(scanners[2].Text())
-	}
+    var validCoupons []string // Using dynamic slice; pre-allocation could be a micro-optimization if size is predictable
 
-	validCoupons := make([]string, 0)
-	for hasMore[0] || hasMore[1] || hasMore[2] {
-		// Determine the smallest current code
-		minCode := ""
-		for i := 0; i < 3; i++ {
-			if hasMore[i] && (minCode == "" || currentCodes[i] < minCode) {
-				minCode = currentCodes[i]
-			}
-		}
+    for hasMore[0] || hasMore[1] || hasMore[2] { // Continue if at least one file has more lines
+        minCode := ""
+        // Determine the smallest current code among the files that still have lines
+        for i := 0; i < 3; i++ {
+            if hasMore[i] {
+                if minCode == "" || currentCodes[i] < minCode {
+                    minCode = currentCodes[i]
+                }
+            }
+        }
 
-		// Count occurrences of the smallest code
-		count := 0
-		for i := 0; i < 3; i++ {
-			if hasMore[i] && currentCodes[i] == minCode {
-				count++
-			}
-		}
+        if minCode == "" { // Should only happen if all files are exhausted
+            break
+        }
 
-		// If the smallest code appears in at least two files, it's valid
-		if count >= 2 {
-			validCoupons = append(validCoupons, minCode)
-		}
+        count := 0
+        // Count occurrences of the smallest code
+        for i := 0; i < 3; i++ {
+            if hasMore[i] && currentCodes[i] == minCode {
+                count++
+            }
+        }
 
-		// Advance the readers that match the smallest code
-		for i := 0; i < 3; i++ {
-			if hasMore[i] && currentCodes[i] == minCode {
-				hasMore[i] = scanners[i].Scan()
-				if hasMore[i] {
-					currentCodes[i] = strings.TrimSpace(scanners[i].Text())
-				} else {
-					currentCodes[i] = ""
-				}
-			}
-		}
+        // If the smallest code appears in at least two files, it's valid
+        if count >= 2 {
+            validCoupons = append(validCoupons, minCode)
+        }
 
-		if minCode == "" {
-			break // All files exhausted
-		}
-	}
-
-	// Check for scanner errors
-	for i := 0; i < 3; i++ {
-		if err := scanners[i].Err(); err != nil && err != io.EOF {
-			return nil, fmt.Errorf("error reading sorted file %d: %w", i+1, err)
-		}
-	}
-	return validCoupons, nil
+        // Advance the scanners for all files that matched the smallest code
+        for i := 0; i < 3; i++ {
+            if hasMore[i] && currentCodes[i] == minCode {
+                if scanners[i].Scan() {
+                    currentCodes[i] = strings.TrimSpace(scanners[i].Text())
+                } else {
+                    hasMore[i] = false // No more lines in this file
+                    if err := scanners[i].Err(); err != nil {
+                        return nil, fmt.Errorf("error reading sorted file %d (%s): %w", i+1, filePaths[i], err)
+                    }
+                }
+            }
+        }
+    }
+    return validCoupons, nil
 }
+
 
 // LoadAndFindValidCoupons loads coupon codes from files, identifies valid ones, and populates the CouponStore.
 func (s *CouponStoreConcurrent) LoadAndFindValidCoupons(dir string) error {
-	if loaded && loadDir == dir {
-		fmt.Println("CouponStore already loaded and validated from this directory.")
-		return nil
-	}
-	s.coupons = make(map[string]struct{})
-	loaded = false
-	loadDir = ""
+	// This check is now primarily handled by the CouponStoreConcurrentInstance logic with `once.Do`.
+	// If this method were to be called directly multiple times for re-loading, this check would be important.
+	// For the singleton pattern, `loaded` and `loadDir` are managed by `CouponStoreConcurrentInstance`.
+	// However, resetting internal state if a direct reload is intended:
+	// if loaded && loadDir == dir {
+	// 	fmt.Println("CouponStore already loaded and validated from this directory.")
+	// 	return nil
+	// }
 
-	// Check if directory exists and is accessible
+	s.mu.Lock() // Lock before modifying shared state like s.coupons
+	s.coupons = make(map[string]struct{}) // Clear any previous coupons for a fresh load
+	s.mu.Unlock()
+	// 'loaded' and 'loadDir' global vars are set by CouponStoreConcurrentInstance after this function returns.
+
+
 	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("coupon directory %s does not exist: %w", dir, err)
+		}
 		return fmt.Errorf("error accessing coupon directory %s: %w", dir, err)
 	}
 
-	filePaths, err := filepath.Glob(filepath.Join(dir, "*")) // Get all files in the directory
+	filePaths, err := filepath.Glob(filepath.Join(dir, "*"))
 	if err != nil {
 		return fmt.Errorf("error listing files in directory %s: %w", dir, err)
 	}
 
+    // Filter out directories from filePaths, only consider regular files
+    var actualFiles []string
+    for _, fp := range filePaths {
+        info, err := os.Stat(fp)
+        if err != nil {
+            // Could log this error or decide how to handle unstat-able paths
+            continue 
+        }
+        if info.Mode().IsRegular() {
+            actualFiles = append(actualFiles, fp)
+        }
+    }
+    filePaths = actualFiles
+
+
 	if len(filePaths) != 3 {
-		return fmt.Errorf("expected 3 coupon files in the directory, found %d", len(filePaths))
+		return fmt.Errorf("expected 3 coupon files in the directory '%s', found %d regular files", dir, len(filePaths))
 	}
 
-	tempDir, err := os.MkdirTemp("", "coupon_sort")
+	tempDir, err := os.MkdirTemp("", "coupon_sort_") // Suffix for clarity
 	if err != nil {
 		return fmt.Errorf("error creating temporary directory: %w", err)
 	}
-	defer os.RemoveAll(tempDir) // Clean up the temporary directory
+	defer os.RemoveAll(tempDir)
 
 	var sortedFiles [3]string
 	var wg sync.WaitGroup
-	errChan := make(chan error, 3) // Channel for errors from goroutines
+	errChan := make(chan error, len(filePaths)) // Buffer for one error per goroutine
 
 	for i, filePath := range filePaths {
 		wg.Add(1)
 		go func(fp string, index int) {
 			defer wg.Done()
+			// Pass the actual file path (fp) to extractAndSort
 			sortedPath, sortErr := extractAndSort(fp, tempDir, index+1)
 			if sortErr != nil {
-				errChan <- sortErr
+				errChan <- fmt.Errorf("failed to extract and sort file %s: %w", fp, sortErr)
 				return
 			}
 			sortedFiles[index] = sortedPath
-		}(filePath, i)
+		}(filePath, i) // Pass filePath and i to the goroutine
 	}
 
 	wg.Wait()
-	close(errChan)
+	close(errChan) // Close errChan after all goroutines are done
 
 	// Check for errors from goroutines
-	for err := range errChan {
-		if err != nil {
-			return err // Return the first error encountered
+	for sortErr := range errChan {
+		if sortErr != nil {
+			return sortErr // Return the first error encountered
 		}
 	}
 
 	validCoupons, err := findValidCoupons(sortedFiles[0], sortedFiles[1], sortedFiles[2])
 	if err != nil {
-		return err
+		return fmt.Errorf("error finding valid coupons from sorted files: %w", err)
 	}
 
 	s.mu.Lock()
@@ -316,9 +335,7 @@ func (s *CouponStoreConcurrent) LoadAndFindValidCoupons(dir string) error {
 	for _, code := range validCoupons {
 		s.coupons[code] = struct{}{}
 	}
-
-	loaded = true
-	loadDir = dir
+    // global `loaded` and `loadDir` will be set by the caller `CouponStoreConcurrentInstance`
 	return nil
 }
 
@@ -330,11 +347,18 @@ func (s *CouponStoreConcurrent) GetCoupon(code string) bool {
 	return exists
 }
 
-// Helper function to get the number of CPUs to use for parallel operations
+// Helper function to get the number of CPUs to use for parallel operations.
+// Note: With the refactoring of `extractAndSort`, this function is not directly
+// used in the coupon loading path as it was before (for the internal worker pool).
+// It's kept here in case other parts of the package use it, or for future use.
+// The number of concurrent `extractAndSort` operations is fixed at 3 (one per file).
 func getNumCPU() int {
 	numCPU := runtime.NumCPU()
-	if numCPU > 8 { //limit the number of goroutines
+	if numCPU > 8 { // limit the number of goroutines for CPU-bound tasks if it were used
 		numCPU = 8
 	}
+    if numCPU <= 0 { // Ensure at least 1
+        numCPU = 1
+    }
 	return numCPU
 }

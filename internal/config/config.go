@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -46,11 +47,12 @@ func Load() (*Config, error) {
 
 	// Add config paths
 	if configPath := os.Getenv("CONFIG_PATH"); configPath != "" {
+		log.Printf("Config path added successfully, %s", configPath)
 		v.AddConfigPath(configPath)
 	}
 	// v.AddConfigPath(".")
 	v.AddConfigPath("../../config")
-
+	log.Printf("Config path added successfully, %s %s", v.GetString("files.productsfile"), v.GetString("files.couponsdir"))
 	// Configure environment variables
 	v.SetEnvPrefix("")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))

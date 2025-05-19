@@ -3,6 +3,7 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/ravibandhu/oolio-food-ordering/internal/config"
 	"github.com/ravibandhu/oolio-food-ordering/internal/data"
@@ -24,12 +25,13 @@ import (
 // @name X-API-Key
 func main() {
 	// Load configuration
+	os.Setenv("CONFIG_PATH", "/Users/ravibandhu/personal/go/oolio-food-ordering/config")
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 	log.Print("Configuration loaded successfully")
-	
+
 	// Create data store
 	store, err := data.NewStore(cfg)
 	if err != nil {
@@ -40,7 +42,7 @@ func main() {
 	// Setup router
 	r := router.SetupRouter(store)
 	log.Print("Router setup successfully")
-	
+
 	// Start server
 	log.Printf("Starting server on %s", cfg.Server.Port)
 	if err := r.Run(cfg.Server.Port); err != nil {
