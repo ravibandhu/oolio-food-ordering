@@ -1,0 +1,47 @@
+[
+  {
+    "id": "prod-1",
+    "name": "Classic Burger",
+    "description": "A juicy beef patty with fresh lettuce, tomatoes, and our special sauce",
+    "price": 9.99,
+    "category": "Main Course",
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z"
+  },
+  {
+    "id": "prod-2",
+    "name": "Veggie Pizza",
+    "description": "Fresh vegetables on a crispy crust with mozzarella cheese",
+    "price": 12.99,
+    "category": "Main Course",
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z"
+  },
+  {
+    "id": "prod-3",
+    "name": "Caesar Salad",
+    "description": "Crisp romaine lettuce with parmesan cheese and Caesar dressing",
+    "price": 7.99,
+    "category": "Salads",
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z"
+  },
+  {
+    "id": "prod-4",
+    "name": "French Fries",
+    "description": "Crispy golden fries seasoned with sea salt",
+    "price": 3.99,
+    "category": "Sides",
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z"
+  },
+  {
+    "id": "prod-5",
+    "name": "Chocolate Milkshake",
+    "description": "Rich and creamy chocolate milkshake topped with whipped cream",
+    "price": 4.99,
+    "category": "Beverages",
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z"
+  }
+] 

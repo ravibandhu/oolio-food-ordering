@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
+	"strings"
 
+	"github.com/ravibandhu/oolio-food-ordering/internal/data"
 	"github.com/ravibandhu/oolio-food-ordering/internal/models"
 )
 
@@ -36,6 +39,18 @@ type productResponse struct {
 	Body models.Product
 }
 
+// ProductHandler handles product-related HTTP requests
+type ProductHandler struct {
+	store *data.Store
+}
+
+// NewProductHandler creates a new ProductHandler instance
+func NewProductHandler(store *data.Store) *ProductHandler {
+	return &ProductHandler{
+		store: store,
+	}
+}
+
 // @Operation GET /products
 // @Summary List all available products
 // @Description Get a list of all available products in the system
@@ -44,8 +59,21 @@ type productResponse struct {
 // @Success 200 {array} models.Product
 // @Failure 500 {object} models.ErrorResponse
 // @Router /products [get]
-func ListProducts(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement
+func (h *ProductHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
+	// Get all products from the store
+	products := h.store.GetAllProducts()
+
+	// Set content type header
+	w.Header().Set("Content-Type", "application/json")
+
+	// Encode and send response
+	if err := json.NewEncoder(w).Encode(products); err != nil {
+		errResp := models.NewErrorResponse("INTERNAL_ERROR", "Failed to encode response").
+			AddDetail("error", err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(errResp)
+		return
+	}
 }
 
 // @Operation GET /products/{id}
@@ -58,8 +86,40 @@ func ListProducts(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} models.ErrorResponse
 // @Failure 500 {object} models.ErrorResponse
 // @Router /products/{id} [get]
-func GetProduct(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement
+func (h *ProductHandler) GetProduct(w http.ResponseWriter, r *http.Request) {
+	// Extract product ID from URL path
+	path := r.URL.Path
+	parts := strings.Split(path, "/")
+	if len(parts) < 3 {
+		errResp := models.NewErrorResponse("INVALID_REQUEST", "Invalid product ID")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(errResp)
+		return
+	}
+	productID := parts[len(parts)-1]
+
+	// Get product from store
+	product, err := h.store.GetProduct(productID)
+	if err != nil {
+		errResp := models.NewErrorResponse("NOT_FOUND", "Product not found").
+			AddDetail("productId", productID).
+			AddDetail("error", err.Error())
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(errResp)
+		return
+	}
+
+	// Set content type header
+	w.Header().Set("Content-Type", "application/json")
+
+	// Encode and send response
+	if err := json.NewEncoder(w).Encode(product); err != nil {
+		errResp := models.NewErrorResponse("INTERNAL_ERROR", "Failed to encode response").
+			AddDetail("error", err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(errResp)
+		return
+	}
 }
 
 // @Operation POST /products

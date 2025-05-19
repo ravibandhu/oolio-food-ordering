@@ -3,11 +3,10 @@ package main
 
 import (
 	"log"
-	"net/http"
 
-	_ "github.com/ravibandhu/oolio-food-ordering/docs"
 	"github.com/ravibandhu/oolio-food-ordering/internal/config"
-	"github.com/ravibandhu/oolio-food-ordering/internal/handlers"
+	"github.com/ravibandhu/oolio-food-ordering/internal/data"
+	"github.com/ravibandhu/oolio-food-ordering/internal/router"
 )
 
 // @title Oolio Food Ordering API
@@ -29,14 +28,22 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
+	log.Print("Configuration loaded successfully")
+	
+	// Create data store
+	store, err := data.NewStore(cfg)
+	if err != nil {
+		log.Fatalf("Failed to create store: %v", err)
+	}
+	log.Print("Store created successfully")
 
-	// Register routes
-	http.HandleFunc("/api/v1/products", handlers.ListProducts)
-	http.HandleFunc("/api/v1/products/", handlers.GetProduct)
-
-	// Start the server
+	// Setup router
+	r := router.SetupRouter(store)
+	log.Print("Router setup successfully")
+	
+	// Start server
 	log.Printf("Starting server on %s", cfg.Server.Port)
-	if err := http.ListenAndServe(cfg.Server.Port, nil); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	if err := r.Run(cfg.Server.Port); err != nil {
+		log.Fatalf("Server failed to start: %v", err)
 	}
 }

@@ -29,7 +29,7 @@ func NewStore(cfg *config.Config) (*Store, error) {
 	}
 
 	// Get coupon store instance
-	couponStore, err := Instance(cfg.Files.CouponsDir)
+	couponStore, err := CouponStoreConcurrentInstance(cfg.Files.CouponsDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize coupon store: %w", err)
 	}
@@ -63,31 +63,4 @@ func (s *Store) ValidateCoupon(code string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.coupons.GetCoupon(code)
-}
-
-// ReloadData reloads both products and coupons data
-func (s *Store) ReloadData() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Reset coupon store singleton state to force reload
-	instance = nil
-	once = sync.Once{}
-	loadErr = nil
-	loadDir = ""
-	loaded = false
-
-	// Reload products
-	if err := s.products.LoadProducts(s.config.Files.ProductsFile); err != nil {
-		return fmt.Errorf("failed to reload products: %w", err)
-	}
-
-	// Get a fresh instance of the coupon store with reloaded data
-	couponStore, err := Instance(s.config.Files.CouponsDir)
-	if err != nil {
-		return fmt.Errorf("failed to reload coupons: %w", err)
-	}
-	s.coupons = couponStore
-
-	return nil
 }

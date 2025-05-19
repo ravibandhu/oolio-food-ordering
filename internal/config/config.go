@@ -48,8 +48,8 @@ func Load() (*Config, error) {
 	if configPath := os.Getenv("CONFIG_PATH"); configPath != "" {
 		v.AddConfigPath(configPath)
 	}
-	v.AddConfigPath(".")
-	v.AddConfigPath("./config")
+	// v.AddConfigPath(".")
+	v.AddConfigPath("../../config")
 
 	// Configure environment variables
 	v.SetEnvPrefix("")

@@ -1,7 +1,6 @@
 package data
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
@@ -9,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ravibandhu/oolio-food-ordering/internal/config"
-	"github.com/ravibandhu/oolio-food-ordering/internal/models"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -208,63 +206,4 @@ func TestStore_ValidateCoupon(t *testing.T) {
 			assert.Equal(t, tt.isValid, valid)
 		})
 	}
-}
-
-func TestStore_ReloadData(t *testing.T) {
-	// Set up test data
-	tempDir, productsFile, cfg, cleanup := setupTestData(t)
-	defer cleanup()
-
-	// Create store
-	store, err := NewStore(cfg)
-	assert.NoError(t, err)
-	assert.NotNil(t, store)
-
-	// Verify initial data
-	assert.True(t, store.ValidateCoupon("TEST10"))
-	product, err := store.GetProduct("prod-1")
-	assert.NoError(t, err)
-	assert.NotNil(t, product)
-
-	// Create new coupon file
-	newCouponFile := filepath.Join(tempDir, "coupons", "new_coupons.txt")
-	err = os.WriteFile(newCouponFile, []byte("NEWCOUPON\n"), 0644)
-	assert.NoError(t, err)
-
-	// Remove old coupon file
-	err = os.Remove(filepath.Join(tempDir, "coupons", "test_coupons.txt"))
-	assert.NoError(t, err)
-
-	// Update products file
-	newProduct := &models.Product{
-		ID:          "prod-new",
-		Name:        "New Product",
-		Description: "New Description",
-		Price:       29.99,
-		Category:    "New Category",
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-	}
-	products := []*models.Product{newProduct}
-	file, err := os.Create(productsFile)
-	assert.NoError(t, err)
-	err = json.NewEncoder(file).Encode(products)
-	assert.NoError(t, err)
-	file.Close()
-
-	// Reload data
-	err = store.ReloadData()
-	assert.NoError(t, err)
-
-	// Verify new data is loaded
-	assert.True(t, store.ValidateCoupon("NEWCOUPON"))
-	newProd, err := store.GetProduct("prod-new")
-	assert.NoError(t, err)
-	assert.NotNil(t, newProd)
-	assert.Equal(t, "New Product", newProd.Name)
-
-	// Verify old data is cleared
-	assert.False(t, store.ValidateCoupon("TEST10"))
-	_, err = store.GetProduct("prod-1")
-	assert.Error(t, err)
 }
