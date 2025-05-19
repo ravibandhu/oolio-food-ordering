@@ -1,0 +1,20 @@
+[
+  {
+    "id": "prod-1",
+    "name": "Chicken Burger",
+    "description": "A juicy chicken burger with fresh lettuce and tomatoes",
+    "price": 9.99,
+    "category": "Main Course",
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z"
+  },
+  {
+    "id": "prod-2",
+    "name": "Veggie Pizza",
+    "description": "Fresh vegetable pizza with mozzarella cheese",
+    "price": 14.99,
+    "category": "Main Course",
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z"
+  }
+] 
