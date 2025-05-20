@@ -83,7 +83,7 @@ type OrderItem struct {
 	// @required
 	// @minimum 0.01
 	// @example 9.99
-	Price float64 `json:"price" validate:"required,gt=0"`
+	Price float64 `json:"price"`
 }
 
 // Order represents a complete order with its items and details

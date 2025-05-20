@@ -8,6 +8,12 @@ import (
 	"github.com/ravibandhu/oolio-food-ordering/internal/data"
 	"github.com/ravibandhu/oolio-food-ordering/internal/handlers"
 	"github.com/ravibandhu/oolio-food-ordering/internal/services"
+
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+
+	// Import for docs
+	_ "github.com/ravibandhu/oolio-food-ordering/docs"
 )
 
 // Router wraps the underlying router implementation and associated resources
@@ -38,6 +44,9 @@ func (r *Router) setupRoutes(ctx context.Context) {
 	productHandler := handlers.NewProductHandler(r.store)
 	orderHandler := handlers.NewOrderHandler(orderService)
 	profileHandler := handlers.NewProfileHandler()
+
+	// Swagger documentation
+	r.engine.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// Product routes
 	products := r.engine.Group("/products")
