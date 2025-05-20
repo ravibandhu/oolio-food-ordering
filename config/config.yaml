@@ -5,7 +5,7 @@ server:
   idletimeout: "60s"
 
 files:
-  productsfile: "/Users/ravibandhu/personal/go/oolio-food-ordering/data/products.json"
+  productsfile: "/Users/ravibandhu/personal/go/oolio-food-ordering/data/testdata/products.json"
   couponsdir: "/Users/ravibandhu/personal/go/oolio-food-ordering/data/coupons"
 
 logging:

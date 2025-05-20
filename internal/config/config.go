@@ -10,34 +10,34 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Config holds all application configuration loaded from environment variables or files.
-type Config struct {
-	Server  ServerConfig  // Server-related settings
-	Files   FilesConfig   // File paths and directories
-	Logging LoggingConfig // Logging level and options
+// Server represents server configuration
+type Server struct {
+	Port         string        `mapstructure:"port"`
+	ReadTimeout  time.Duration `mapstructure:"read_timeout"`
+	WriteTimeout time.Duration `mapstructure:"write_timeout"`
+	IdleTimeout  time.Duration `mapstructure:"idle_timeout"`
 }
 
-// ServerConfig holds server-related configuration.
-type ServerConfig struct {
-	Port         string        // Port on which the server listens (e.g., ":8080")
-	ReadTimeout  time.Duration // Maximum duration for reading the entire request
-	WriteTimeout time.Duration // Maximum duration for writing the response
-	IdleTimeout  time.Duration // Maximum duration to wait for the next request
-}
-
-// FilesConfig holds file and directory paths for data sources.
-type FilesConfig struct {
-	ProductsFile string // Path to the products JSON file
-	CouponsDir   string // Directory containing gzipped coupon files
+// Files represents file paths configuration
+type Files struct {
+	ProductsFile string `mapstructure:"products_file"`
+	CouponsDir   string `mapstructure:"coupons_dir"`
 }
 
 // LoggingConfig holds logging configuration.
 type LoggingConfig struct {
-	Level  string // Logging level (e.g., "info", "debug", "warn")
-	Format string // Log format (e.g., "json", "text")
+	Level  string `mapstructure:"level"`  // Logging level (e.g., "info", "debug", "warn")
+	Format string `mapstructure:"format"` // Log format (e.g., "json", "text")
 }
 
-// Load reads configuration from environment variables and config files using Viper.
+// Config represents the application configuration
+type Config struct {
+	Server  Server        `mapstructure:"server"`
+	Files   Files         `mapstructure:"files"`
+	Logging LoggingConfig `mapstructure:"logging"`
+}
+
+// Load loads the configuration from the specified file and environment variables
 func Load() (*Config, error) {
 	v := viper.New()
 
@@ -94,13 +94,13 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Server: ServerConfig{
+		Server: Server{
 			Port:         v.GetString("server.port"),
 			ReadTimeout:  readTimeout,
 			WriteTimeout: writeTimeout,
 			IdleTimeout:  idleTimeout,
 		},
-		Files: FilesConfig{
+		Files: Files{
 			ProductsFile: v.GetString("files.productsfile"),
 			CouponsDir:   v.GetString("files.couponsdir"),
 		},

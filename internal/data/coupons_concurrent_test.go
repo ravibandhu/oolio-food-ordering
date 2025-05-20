@@ -40,9 +40,9 @@ func createTestCouponFiles(t *testing.T) (string, func()) {
 	}
 
 	// Create three gzipped files with different coupon sets
-	createGzipFile("coupons1.txt.gz", []string{"COUPON1", "COUPON2", "COUPON3", "COMMON1"})
-	createGzipFile("coupons2.txt.gz", []string{"COUPON2", "COUPON4", "COUPON5", "COMMON1", "COMMON2"})
-	createGzipFile("coupons3.txt.gz", []string{"COUPON3", "COUPON5", "COUPON6", "COMMON1", "COMMON2", "COMMON3"})
+	createGzipFile("coupons1.txt.gz", []string{"COUPONA1", "COUPONA2", "COUPONA3", "COMMONA1"})
+	createGzipFile("coupons2.txt.gz", []string{"COUPONA2", "COUPONA4", "COUPONA5", "COMMONA1", "COMMONA2"})
+	createGzipFile("coupons3.txt.gz", []string{"COUPONA3", "COUPONA5", "COUPONA6", "COMMONA1", "COMMONA2", "COMMONA3"})
 
 	// Return the directory path and a cleanup function
 	cleanup := func() {
@@ -69,18 +69,18 @@ func TestCouponStore_LoadAndFindValidCoupons(t *testing.T) {
 		expectedValid bool
 	}{
 		{
-			name:          "Valid Coupon (Present in 2 files - COMMON2)",
-			couponCode:    "COMMON2",
+			name:          "Valid Coupon (Present in 2 files - COMMONA2)",
+			couponCode:    "COMMONA2",
 			expectedValid: true,
 		},
 		{
-			name:          "Valid Coupon (Present in 2 files - COUPON2)",
-			couponCode:    "COUPON2",
+			name:          "Valid Coupon (Present in 2 files - COUPONA2)",
+			couponCode:    "COUPONA2",
 			expectedValid: true,
 		},
 		{
-			name:          "Invalid Coupon (Present in only 1 file - COUPON1)",
-			couponCode:    "COUPON1",
+			name:          "Invalid Coupon (Present in only 1 file - COUPONA1)",
+			couponCode:    "COUPONA1",
 			expectedValid: false,
 		},
 		{
@@ -89,28 +89,28 @@ func TestCouponStore_LoadAndFindValidCoupons(t *testing.T) {
 			expectedValid: false,
 		},
 		{
-			name:          "Valid Coupon (Present in 2 files - COUPON3)",
-			couponCode:    "COUPON3",
+			name:          "Valid Coupon (Present in 2 files - COUPONA3)",
+			couponCode:    "COUPONA3",
 			expectedValid: true,
 		},
 		{
-			name:          "Valid Coupon (Present in 2 files - COUPON5)",
-			couponCode:    "COUPON5",
+			name:          "Valid Coupon (Present in 2 files - COUPONA5)",
+			couponCode:    "COUPONA5",
 			expectedValid: true,
 		},
 		{
-			name:          "Invalid Coupon (Present in only 1 file - COUPON6)",
-			couponCode:    "COUPON6",
+			name:          "Invalid Coupon (Present in only 1 file - COUPONA6)",
+			couponCode:    "COUPONA6",
 			expectedValid: false,
 		},
 		{
-			name:          "Valid Coupon (Present in 3 files - COMMON1)",
-			couponCode:    "COMMON1",
+			name:          "Valid Coupon (Present in 3 files - COMMONA1)",
+			couponCode:    "COMMONA1",
 			expectedValid: true,
 		},
 		{
-			name:          "Invalid Coupon (Present in 1 files - COMMON3)",
-			couponCode:    "COMMON3",
+			name:          "Invalid Coupon (Present in 1 files - COMMONA3)",
+			couponCode:    "COMMONA3",
 			expectedValid: false,
 		},
 	}
@@ -136,7 +136,7 @@ func TestCouponStore_LoadAndFindValidCoupons(t *testing.T) {
 		t.Fatalf("Failed to get CouponStoreConcurrent instance for empty dir: %v", err)
 	}
 
-	isValid1 := store.GetCoupon("COUPON1")
+	isValid1 := store.GetCoupon("COUPONA1")
 	if isValid1 {
 		t.Errorf("GetCoupon should return true for valid coupon in mixed dir")
 	}

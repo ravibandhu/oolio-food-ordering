@@ -3,48 +3,43 @@ package models
 import (
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewProduct(t *testing.T) {
 	id := "prod-1"
 	name := "Burger"
-	desc := "Delicious burger"
 	price := 9.99
 	category := "Main Course"
+	image := &ProductImage{
+		Thumbnail: "https://example.com/images/burger-thumb.jpg",
+		Mobile:    "https://example.com/images/burger-mobile.jpg",
+		Tablet:    "https://example.com/images/burger-tablet.jpg",
+		Desktop:   "https://example.com/images/burger-desktop.jpg",
+	}
 
-	p := NewProduct(id, name, desc, price, category)
+	p := NewProduct(id, name, price, category, image)
 
-	if p.ID != id {
-		t.Errorf("expected ID %s, got %s", id, p.ID)
-	}
-	if p.Name != name {
-		t.Errorf("expected Name %s, got %s", name, p.Name)
-	}
-	if p.Description != desc {
-		t.Errorf("expected Description %s, got %s", desc, p.Description)
-	}
-	if p.Price != price {
-		t.Errorf("expected Price %.2f, got %.2f", price, p.Price)
-	}
-	if p.Category != category {
-		t.Errorf("expected Category %s, got %s", category, p.Category)
-	}
-	if p.CreatedAt.IsZero() {
-		t.Error("CreatedAt should not be zero")
-	}
-	if p.UpdatedAt.IsZero() {
-		t.Error("UpdatedAt should not be zero")
-	}
+	assert.Equal(t, id, p.ID)
+	assert.Equal(t, name, p.Name)
+	assert.Equal(t, price, p.Price)
+	assert.Equal(t, category, p.Category)
+	require.NotNil(t, p.Image)
+	assert.Equal(t, image.Thumbnail, p.Image.Thumbnail)
+	assert.Equal(t, image.Mobile, p.Image.Mobile)
+	assert.Equal(t, image.Tablet, p.Image.Tablet)
+	assert.Equal(t, image.Desktop, p.Image.Desktop)
+	assert.False(t, p.CreatedAt.IsZero())
+	assert.False(t, p.UpdatedAt.IsZero())
 
 	// Test validation
-	if err := Validate(p); err != nil {
-		t.Errorf("validation failed: %v", err)
-	}
+	err := Validate(p)
+	assert.NoError(t, err)
 }
 
 func TestNewOrder(t *testing.T) {
-	id := "order-1"
-	customerID := "cust-1"
 	items := []OrderItem{
 		{
 			ProductID: "prod-1",
@@ -52,40 +47,37 @@ func TestNewOrder(t *testing.T) {
 			Price:     9.99,
 		},
 	}
-	total := 19.98
-	couponCode := "SAVE10"
+	products := []Product{
+		{
+			ID:          "prod-1",
+			Name:        "Test Product",
+			Price:       9.99,
+			Category:    "Test Category",
+			Image: &ProductImage{
+				Thumbnail: "https://example.com/images/test-thumb.jpg",
+				Mobile:    "https://example.com/images/test-mobile.jpg",
+				Tablet:    "https://example.com/images/test-tablet.jpg",
+				Desktop:   "https://example.com/images/test-desktop.jpg",
+			},
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+	}
+	totalAmount := 19.98
+	couponCode := "TEST10"
 
-	o := NewOrder(id, customerID, items, total, &couponCode)
+	order := NewOrder(items, products, totalAmount, couponCode)
 
-	if o.ID != id {
-		t.Errorf("expected ID %s, got %s", id, o.ID)
-	}
-	if o.CustomerID != customerID {
-		t.Errorf("expected CustomerID %s, got %s", customerID, o.CustomerID)
-	}
-	if len(o.Items) != len(items) {
-		t.Errorf("expected %d items, got %d", len(items), len(o.Items))
-	}
-	if o.TotalAmount != total {
-		t.Errorf("expected TotalAmount %.2f, got %.2f", total, o.TotalAmount)
-	}
-	if o.Status != "pending" {
-		t.Errorf("expected Status pending, got %s", o.Status)
-	}
-	if o.CouponCode == nil || *o.CouponCode != couponCode {
-		t.Errorf("expected CouponCode %s, got %v", couponCode, o.CouponCode)
-	}
-	if o.CreatedAt.IsZero() {
-		t.Error("CreatedAt should not be zero")
-	}
-	if o.UpdatedAt.IsZero() {
-		t.Error("UpdatedAt should not be zero")
-	}
+	assert.NotEmpty(t, order.ID)
+	assert.Equal(t, len(items), len(order.Items))
+	assert.Equal(t, len(products), len(order.Products))
+	assert.Equal(t, totalAmount, order.TotalAmount)
+	assert.Equal(t, couponCode, order.CouponCode)
+	assert.False(t, order.CreatedAt.IsZero())
 
 	// Test validation
-	if err := Validate(o); err != nil {
-		t.Errorf("validation failed: %v", err)
-	}
+	err := Validate(order)
+	assert.NoError(t, err)
 }
 
 func TestNewCoupon(t *testing.T) {
@@ -97,35 +89,18 @@ func TestNewCoupon(t *testing.T) {
 
 	c := NewCoupon(code, discount, minAmount, expiry, maxUsage)
 
-	if c.Code != code {
-		t.Errorf("expected Code %s, got %s", code, c.Code)
-	}
-	if c.DiscountPercent != discount {
-		t.Errorf("expected DiscountPercent %.2f, got %.2f", discount, c.DiscountPercent)
-	}
-	if c.MinOrderAmount != minAmount {
-		t.Errorf("expected MinOrderAmount %.2f, got %.2f", minAmount, c.MinOrderAmount)
-	}
-	if !c.ExpiryDate.Equal(expiry) {
-		t.Errorf("expected ExpiryDate %v, got %v", expiry, c.ExpiryDate)
-	}
-	if c.MaxUsagePerUser != maxUsage {
-		t.Errorf("expected MaxUsagePerUser %d, got %d", maxUsage, c.MaxUsagePerUser)
-	}
-	if !c.IsActive {
-		t.Error("expected IsActive to be true")
-	}
-	if c.CreatedAt.IsZero() {
-		t.Error("CreatedAt should not be zero")
-	}
-	if c.UpdatedAt.IsZero() {
-		t.Error("UpdatedAt should not be zero")
-	}
+	assert.Equal(t, code, c.Code)
+	assert.Equal(t, discount, c.DiscountPercent)
+	assert.Equal(t, minAmount, c.MinOrderAmount)
+	assert.True(t, expiry.Equal(c.ExpiryDate))
+	assert.Equal(t, maxUsage, c.MaxUsagePerUser)
+	assert.True(t, c.IsActive)
+	assert.False(t, c.CreatedAt.IsZero())
+	assert.False(t, c.UpdatedAt.IsZero())
 
 	// Test validation
-	if err := Validate(c); err != nil {
-		t.Errorf("validation failed: %v", err)
-	}
+	err := Validate(c)
+	assert.NoError(t, err)
 }
 
 func TestNewErrorResponse(t *testing.T) {
@@ -139,45 +114,28 @@ func TestNewErrorResponse(t *testing.T) {
 	// Test creating error response with single detail
 	e1 := NewErrorResponse(code, message).AddDetail("price", "must be greater than 0")
 
-	if e1.Code != code {
-		t.Errorf("expected Code %s, got %s", code, e1.Code)
-	}
-	if e1.Message != message {
-		t.Errorf("expected Message %s, got %s", message, e1.Message)
-	}
-	if e1.Details == nil {
-		t.Error("Details should not be nil")
-	}
-	if e1.Details["price"] != "must be greater than 0" {
-		t.Errorf("expected detail message %s, got %s", "must be greater than 0", e1.Details["price"])
-	}
+	assert.Equal(t, code, e1.Code)
+	assert.Equal(t, message, e1.Message)
+	require.NotNil(t, e1.Details)
+	assert.Equal(t, "must be greater than 0", e1.Details["price"])
 
 	// Test creating error response with multiple details
 	e2 := NewErrorResponse(code, message).AddDetails(details)
 
-	if len(e2.Details) != 2 {
-		t.Errorf("expected 2 details, got %d", len(e2.Details))
-	}
-	if e2.Details["price"] != details["price"] {
-		t.Errorf("expected price detail %s, got %s", details["price"], e2.Details["price"])
-	}
-	if e2.Details["quantity"] != details["quantity"] {
-		t.Errorf("expected quantity detail %s, got %s", details["quantity"], e2.Details["quantity"])
-	}
+	assert.Equal(t, 2, len(e2.Details))
+	assert.Equal(t, details["price"], e2.Details["price"])
+	assert.Equal(t, details["quantity"], e2.Details["quantity"])
 
 	// Test method chaining
 	e3 := NewErrorResponse(code, message).
 		AddDetail("price", "must be greater than 0").
 		AddDetail("quantity", "must be at least 1")
 
-	if len(e3.Details) != 2 {
-		t.Errorf("expected 2 details, got %d", len(e3.Details))
-	}
+	assert.Equal(t, 2, len(e3.Details))
 
 	// Test validation
-	if err := Validate(e1); err != nil {
-		t.Errorf("validation failed: %v", err)
-	}
+	err := Validate(e1)
+	assert.NoError(t, err)
 }
 
 func TestValidation(t *testing.T) {
@@ -186,21 +144,239 @@ func TestValidation(t *testing.T) {
 		input   interface{}
 		wantErr bool
 	}{
+		// Product validation tests
 		{
-			name:  "invalid product - missing required fields",
+			name: "valid product",
 			input: &Product{
-				// Missing required fields
+				ID:          "prod-1",
+				Name:        "Test Product",
+				Price:       9.99,
+				Category:    "Test Category",
+				Image: &ProductImage{
+					Thumbnail: "https://example.com/images/test-thumb.jpg",
+					Mobile:    "https://example.com/images/test-mobile.jpg",
+					Tablet:    "https://example.com/images/test-tablet.jpg",
+					Desktop:   "https://example.com/images/test-desktop.jpg",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid product - missing ID",
+			input: &Product{
+				Name:        "Test Product",
+				Price:       9.99,
+				Category:    "Test Category",
+				Image: &ProductImage{
+					Thumbnail: "https://example.com/images/test-thumb.jpg",
+					Mobile:    "https://example.com/images/test-mobile.jpg",
+					Tablet:    "https://example.com/images/test-tablet.jpg",
+					Desktop:   "https://example.com/images/test-desktop.jpg",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid product - missing name",
+			input: &Product{
+				ID:          "prod-1",
+				Price:       9.99,
+				Category:    "Test Category",
+				Image: &ProductImage{
+					Thumbnail: "https://example.com/images/test-thumb.jpg",
+					Mobile:    "https://example.com/images/test-mobile.jpg",
+					Tablet:    "https://example.com/images/test-tablet.jpg",
+					Desktop:   "https://example.com/images/test-desktop.jpg",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid product - zero price",
+			input: &Product{
+				ID:          "prod-1",
+				Name:        "Test Product",
+				Price:       0,
+				Category:    "Test Category",
+				Image: &ProductImage{
+					Thumbnail: "https://example.com/images/test-thumb.jpg",
+					Mobile:    "https://example.com/images/test-mobile.jpg",
+					Tablet:    "https://example.com/images/test-tablet.jpg",
+					Desktop:   "https://example.com/images/test-desktop.jpg",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid product - negative price",
+			input: &Product{
+				ID:          "prod-1",
+				Name:        "Test Product",
+				Price:       -9.99,
+				Category:    "Test Category",
+				Image: &ProductImage{
+					Thumbnail: "https://example.com/images/test-thumb.jpg",
+					Mobile:    "https://example.com/images/test-mobile.jpg",
+					Tablet:    "https://example.com/images/test-tablet.jpg",
+					Desktop:   "https://example.com/images/test-desktop.jpg",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid product - missing image",
+			input: &Product{
+				ID:          "prod-1",
+				Name:        "Test Product",
+				Price:       9.99,
+				Category:    "Test Category",
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid product - invalid image URLs",
+			input: &Product{
+				ID:          "prod-1",
+				Name:        "Test Product",
+				Price:       9.99,
+				Category:    "Test Category",
+				Image: &ProductImage{
+					Thumbnail: "invalid-url",
+					Mobile:    "invalid-url",
+					Tablet:    "invalid-url",
+					Desktop:   "invalid-url",
+				},
+			},
+			wantErr: true,
+		},
+
+		// Order validation tests
+		{
+			name: "valid order",
+			input: &Order{
+				ID: "order-1",
+				Items: []OrderItem{
+					{ProductID: "prod-1", Quantity: 1, Price: 9.99},
+				},
+				Products: []Product{
+					{
+						ID:          "prod-1",
+						Name:        "Test Product",
+						Price:       9.99,
+						Category:    "Test Category",
+						Image: &ProductImage{
+							Thumbnail: "https://example.com/images/test-thumb.jpg",
+							Mobile:    "https://example.com/images/test-mobile.jpg",
+							Tablet:    "https://example.com/images/test-tablet.jpg",
+							Desktop:   "https://example.com/images/test-desktop.jpg",
+						},
+					},
+				},
+				TotalAmount: 9.99,
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid order - missing ID",
+			input: &Order{
+				Items: []OrderItem{
+					{ProductID: "prod-1", Quantity: 1, Price: 9.99},
+				},
+				Products: []Product{
+					{
+						ID:          "prod-1",
+						Name:        "Test Product",
+						Price:       9.99,
+						Category:    "Test Category",
+						Image: &ProductImage{
+							Thumbnail: "https://example.com/images/test-thumb.jpg",
+							Mobile:    "https://example.com/images/test-mobile.jpg",
+							Tablet:    "https://example.com/images/test-tablet.jpg",
+							Desktop:   "https://example.com/images/test-desktop.jpg",
+						},
+					},
+				},
+				TotalAmount: 9.99,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid order - empty items",
+			input: &Order{
+				ID:          "order-1",
+				Items:       []OrderItem{},
+				Products:    []Product{},
+				TotalAmount: 0,
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid order - negative total amount",
 			input: &Order{
-				ID:          "order-1",
-				CustomerID:  "cust-1",
-				Items:       []OrderItem{{ProductID: "prod-1", Quantity: 1, Price: 9.99}},
-				TotalAmount: -1,
-				Status:      "pending",
+				ID: "order-1",
+				Items: []OrderItem{
+					{ProductID: "prod-1", Quantity: 1, Price: 9.99},
+				},
+				Products: []Product{
+					{
+						ID:          "prod-1",
+						Name:        "Test Product",
+						Price:       9.99,
+						Category:    "Test Category",
+						Image: &ProductImage{
+							Thumbnail: "https://example.com/images/test-thumb.jpg",
+							Mobile:    "https://example.com/images/test-mobile.jpg",
+							Tablet:    "https://example.com/images/test-tablet.jpg",
+							Desktop:   "https://example.com/images/test-desktop.jpg",
+						},
+					},
+				},
+				TotalAmount: -9.99,
+			},
+			wantErr: true,
+		},
+
+		// Coupon validation tests
+		{
+			name: "valid coupon",
+			input: &Coupon{
+				Code:            "SAVE10",
+				DiscountPercent: 10,
+				MinOrderAmount:  20,
+				ExpiryDate:      time.Now().Add(24 * time.Hour),
+				MaxUsagePerUser: 1,
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid coupon - missing code",
+			input: &Coupon{
+				DiscountPercent: 10,
+				MinOrderAmount:  20,
+				ExpiryDate:      time.Now().Add(24 * time.Hour),
+				MaxUsagePerUser: 1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid coupon - zero discount",
+			input: &Coupon{
+				Code:            "SAVE10",
+				DiscountPercent: 0,
+				MinOrderAmount:  20,
+				ExpiryDate:      time.Now().Add(24 * time.Hour),
+				MaxUsagePerUser: 1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid coupon - negative discount",
+			input: &Coupon{
+				Code:            "SAVE10",
+				DiscountPercent: -10,
+				MinOrderAmount:  20,
+				ExpiryDate:      time.Now().Add(24 * time.Hour),
+				MaxUsagePerUser: 1,
 			},
 			wantErr: true,
 		},
@@ -209,16 +385,66 @@ func TestValidation(t *testing.T) {
 			input: &Coupon{
 				Code:            "SAVE200",
 				DiscountPercent: 200,
-				MinOrderAmount:  0,
-				ExpiryDate:      time.Now(),
+				MinOrderAmount:  20,
+				ExpiryDate:      time.Now().Add(24 * time.Hour),
 				MaxUsagePerUser: 1,
 			},
 			wantErr: true,
 		},
 		{
+			name: "invalid coupon - negative min order amount",
+			input: &Coupon{
+				Code:            "SAVE10",
+				DiscountPercent: 10,
+				MinOrderAmount:  -20,
+				ExpiryDate:      time.Now().Add(24 * time.Hour),
+				MaxUsagePerUser: 1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid coupon - zero max usage",
+			input: &Coupon{
+				Code:            "SAVE10",
+				DiscountPercent: 10,
+				MinOrderAmount:  20,
+				ExpiryDate:      time.Now().Add(24 * time.Hour),
+				MaxUsagePerUser: 0,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid coupon - negative max usage",
+			input: &Coupon{
+				Code:            "SAVE10",
+				DiscountPercent: 10,
+				MinOrderAmount:  20,
+				ExpiryDate:      time.Now().Add(24 * time.Hour),
+				MaxUsagePerUser: -1,
+			},
+			wantErr: true,
+		},
+
+		// Error response validation tests
+		{
+			name: "valid error response",
+			input: &ErrorResponse{
+				Code:    "INVALID_INPUT",
+				Message: "Invalid input provided",
+			},
+			wantErr: false,
+		},
+		{
 			name: "invalid error response - missing code",
 			input: &ErrorResponse{
-				Message: "Error occurred",
+				Message: "Invalid input provided",
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid error response - missing message",
+			input: &ErrorResponse{
+				Code: "INVALID_INPUT",
 			},
 			wantErr: true,
 		},
@@ -227,8 +453,10 @@ func TestValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := Validate(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
 			}
 		})
 	}

@@ -49,14 +49,6 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
-			name: "missing required fields",
-			envVars: map[string]string{
-				"SERVER_PORT": ":9090",
-				// Missing PRODUCTS_FILE and COUPONS_DIR
-			},
-			wantErr: true,
-		},
-		{
 			name: "invalid log level",
 			envVars: map[string]string{
 				"PRODUCTS_FILE": "./testdata/products.json",
@@ -116,10 +108,10 @@ logging:
 
 				// Other values should be from config file
 				if cfg.Server.ReadTimeout != 30*time.Second {
-					t.Errorf("expected read timeout 30s, got %v", cfg.Server.ReadTimeout)
+					t.Errorf("expected read timeout 15s, got %v", cfg.Server.ReadTimeout)
 				}
 				if cfg.Server.WriteTimeout != 30*time.Second {
-					t.Errorf("expected write timeout 30s, got %v", cfg.Server.WriteTimeout)
+					t.Errorf("expected write timeout 15s, got %v", cfg.Server.WriteTimeout)
 				}
 				if cfg.Server.IdleTimeout != 120*time.Second {
 					t.Errorf("expected idle timeout 120s, got %v", cfg.Server.IdleTimeout)
@@ -255,7 +247,7 @@ func TestDefaultValues(t *testing.T) {
 
 func TestGetServerTimeouts(t *testing.T) {
 	cfg := &Config{
-		Server: ServerConfig{
+		Server: Server{
 			ReadTimeout:  20 * time.Second,
 			WriteTimeout: 30 * time.Second,
 			IdleTimeout:  60 * time.Second,

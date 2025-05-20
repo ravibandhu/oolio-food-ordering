@@ -10,11 +10,11 @@ import (
 
 // OrderHandler handles order-related HTTP requests
 type OrderHandler struct {
-	orderService *services.OrderService
+	orderService services.OrderService
 }
 
 // NewOrderHandler creates a new OrderHandler instance
-func NewOrderHandler(orderService *services.OrderService) *OrderHandler {
+func NewOrderHandler(orderService services.OrderService) *OrderHandler {
 	return &OrderHandler{
 		orderService: orderService,
 	}
@@ -26,14 +26,18 @@ func NewOrderHandler(orderService *services.OrderService) *OrderHandler {
 // @Tags orders
 // @Accept json
 // @Produce json
-// @Param order body models.PlaceOrderRequest true "Order to place"
-// @Success 201 {object} models.PlaceOrderResponse
+// @Param order body models.OrderRequest true "Order to place"
+// @Success 201 {object} models.Order
 // @Failure 400 {object} models.ErrorResponse
+// @Failure 422 {object} models.ErrorResponse
 // @Failure 500 {object} models.ErrorResponse
 // @Router /order [post]
 func (h *OrderHandler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
+	// Set content type header for all responses
+	w.Header().Set("Content-Type", "application/json")
+
 	// Parse request body
-	var req models.PlaceOrderRequest
+	var req models.OrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		errResp := models.NewErrorResponse("INVALID_REQUEST", "Failed to parse request body").
 			AddDetail("error", err.Error())
@@ -44,29 +48,34 @@ func (h *OrderHandler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 
 	// Validate request
 	if err := models.Validate(&req); err != nil {
-		errResp := models.NewErrorResponse("INVALID_REQUEST", "Invalid request data").
+		errResp := models.NewErrorResponse("VALIDATION_ERROR", "Invalid request data").
 			AddDetail("error", err.Error())
-		w.WriteHeader(http.StatusBadRequest)
+		w.WriteHeader(http.StatusUnprocessableEntity)
 		json.NewEncoder(w).Encode(errResp)
 		return
 	}
 
 	// Process order
-	response, err := h.orderService.PlaceOrder(&req)
+	order, err := h.orderService.PlaceOrder(&req)
 	if err != nil {
+		// Check if it's a known error type
+		if errResp, ok := err.(*models.ErrorResponse); ok {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			json.NewEncoder(w).Encode(errResp)
+			return
+		}
+
+		// Unknown error
 		errResp := models.NewErrorResponse("ORDER_FAILED", "Failed to place order").
 			AddDetail("error", err.Error())
-		w.WriteHeader(http.StatusBadRequest)
+		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(errResp)
 		return
 	}
 
-	// Set content type header
-	w.Header().Set("Content-Type", "application/json")
+	// Return successful response
 	w.WriteHeader(http.StatusCreated)
-
-	// Encode and send response
-	if err := json.NewEncoder(w).Encode(response); err != nil {
+	if err := json.NewEncoder(w).Encode(order); err != nil {
 		errResp := models.NewErrorResponse("INTERNAL_ERROR", "Failed to encode response").
 			AddDetail("error", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)

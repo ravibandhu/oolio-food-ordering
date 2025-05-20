@@ -4,23 +4,25 @@ import (
 	"bufio"
 	"compress/gzip"
 	"fmt"
+	"hash/fnv" // For a simple string hashing for sharding
 	"io"
+	"math/bits" // For bits.OnesCount32
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
+	"runtime" // For runtime.NumCPU()
 	"strings"
 	"sync"
-
-	"golang.org/x/sync/errgroup"
+	// "sync/atomic" // No longer needed for sharedBitmaskMap values
+	"time"
 )
 
-// CouponStoreConcurrent struct to hold the loaded coupon codes.
+// CouponStoreConcurrent struct remains the same
 type CouponStoreConcurrent struct {
-	coupons map[string]struct{} // Set-like for efficient lookups
-	mu      sync.RWMutex      // Mutex for concurrent access
+	coupons map[string]struct{}
+	mu      sync.RWMutex
 }
 
+// Singleton variables remain the same
 var (
 	once     sync.Once
 	instance *CouponStoreConcurrent
@@ -29,336 +31,286 @@ var (
 	loaded   bool
 )
 
-// NewCouponStoreConcurrent creates and initializes a new CouponStoreConcurrent (private).
+// NewCouponStoreConcurrent and CouponStoreConcurrentInstance remain the same
 func NewCouponStoreConcurrent() *CouponStoreConcurrent {
 	return &CouponStoreConcurrent{
 		coupons: make(map[string]struct{}),
 	}
 }
 
-// CouponStoreConcurrentInstance returns the singleton instance of CouponStoreConcurrent, loading if not already loaded.
 func CouponStoreConcurrentInstance(dir string) (*CouponStoreConcurrent, error) {
 	once.Do(func() {
 		instance = NewCouponStoreConcurrent()
-		loadDir = dir // Store the directory used for loading
+		loadDir = dir
 		loadErr = instance.LoadAndFindValidCoupons(dir)
 		if loadErr == nil {
 			loaded = true
 		}
 	})
-
-    if loaded && loadDir != dir {
-		fmt.Printf("Warning: CouponStore already loaded with directory '%s'. Requested directory '%s' is different.\n", loadDir, dir)
+	if loaded && loadDir != dir {
+		fmt.Printf("[%s] Warning: CouponStore already loaded with directory '%s'. Requested directory '%s' is different. Returning existing instance.\n", time.Now().Format(time.RFC3339Nano), loadDir, dir)
 	}
-
 	return instance, loadErr
 }
 
-// extractAndSort reads coupon codes from a file, preprocesses them (trimming, filtering empty),
-// and pipes them to the system's `sort` command, which writes to a sorted output file.
-func extractAndSort(inputPath, tempDir string, fileIndex int) (string, error) {
-	outputPath := filepath.Join(tempDir, fmt.Sprintf("sorted_coupons_%d.txt", fileIndex))
-
-	// Setup the sort command to read from stdin and write to outputPath
-	cmd := exec.Command("sort", "-o", outputPath)
-	cmd.Env = append(os.Environ(), "LC_ALL=C") // Use C locale for faster sorting
-
-	stdinPipe, err := cmd.StdinPipe()
-	if err != nil {
-		return "", fmt.Errorf("error creating stdin pipe for sort (%s): %w", inputPath, err)
-	}
-
-	// Start the sort command. It will block waiting for input on stdinPipe.
-	if err := cmd.Start(); err != nil {
-		stdinPipe.Close() // Close pipe if command fails to start
-		return "", fmt.Errorf("error starting sort command for %s: %w", inputPath, err)
-	}
-
-	// Use an errgroup to manage the goroutine writing to stdin and waiting for cmd.
-	// The group's context will be cancelled if any of its goroutines return an error.
-	var eg errgroup.Group
-
-	// Goroutine to open the input file, preprocess lines, and write to sort's stdin.
-	eg.Go(func() error {
-		// IMPORTANT: Ensure stdinPipe is closed when this goroutine finishes,
-		// either successfully or due to an error. This signals EOF to the sort command.
-		defer stdinPipe.Close()
-
-		inFile, err := os.Open(inputPath)
-		if err != nil {
-			return fmt.Errorf("error opening input file %s: %w", inputPath, err)
-		}
-		defer inFile.Close()
-
-		var currentReader io.Reader = inFile
-		if strings.HasSuffix(inputPath, ".gz") {
-			gzReader, err := gzip.NewReader(inFile) // gzip.NewReader handles BOM if present
-			if err != nil {
-				return fmt.Errorf("error creating gzip reader for %s: %w", inputPath, err)
-			}
-			defer gzReader.Close() // This closes the gzip stream, inFile is closed by its own defer
-			currentReader = gzReader
-		}
-
-		// Use bufio.Writer for efficient writes to the pipe.
-		writer := bufio.NewWriter(stdinPipe)
-		// Use bufio.Scanner for efficient reads from the file/gzReader.
-		scanner := bufio.NewScanner(currentReader)
-        // Increase buffer size for scanner if lines can be very long (default is 64KB)
-        // const maxCapacity = 1024 * 1024 // 1 MB for example
-        // buf := make([]byte, maxCapacity)
-        // scanner.Buffer(buf, maxCapacity)
-
-
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line != "" { // Filter out empty lines after trimming
-				if _, err := writer.WriteString(line + "\n"); err != nil {
-					// This error typically occurs if the sort command has exited prematurely.
-					return fmt.Errorf("error writing to sort stdin for %s: %w", inputPath, err)
-				}
-			}
-		}
-
-		if err := scanner.Err(); err != nil {
-			return fmt.Errorf("error scanning input file %s: %w", inputPath, err)
-		}
-
-		// Crucial: Flush any buffered data to the pipe.
-		if err := writer.Flush(); err != nil {
-			return fmt.Errorf("error flushing to sort stdin for %s: %w", inputPath, err)
-		}
-
-		return nil // Success for this goroutine
-	})
-
-	// Wait for the sort command to finish and capture its error.
-	cmdErr := cmd.Wait()
-
-	// Wait for the goroutine that writes to stdinPipe to finish.
-	// This will return the error from that goroutine, if any.
-	pipeErr := eg.Wait()
-
-	// Prioritize error from the piping goroutine as it might cause cmdErr.
-	if pipeErr != nil {
-		// If cmdErr is not nil, it might be a consequence of pipeErr (e.g., broken pipe).
-		// We log cmdErr for diagnostics but return pipeErr as the primary cause.
-		if cmdErr != nil {
-			// Consider logging cmdErr here if needed: fmt.Fprintf(os.Stderr, "Sort command also failed for %s: %v\n", inputPath, cmdErr)
-		}
-		return "", fmt.Errorf("error during preprocessing/piping for %s: %w", inputPath, pipeErr)
-	}
-	// If piping was successful, but sort command itself failed.
-	if cmdErr != nil {
-		return "", fmt.Errorf("sort command failed for %s: %w", inputPath, cmdErr)
-	}
-
-	return outputPath, nil
+type couponData struct {
+	couponString string
+	fileBitmask  uint32
 }
 
+// --- Sharded Map Implementation ---
+const numShards = 256 // Tunable. Power of 2 can be good for bitwise modulo.
 
-// findValidCoupons merges three sorted files and identifies coupons present in at least two of them.
-// This function remains largely the same as it's already quite efficient for sorted inputs.
-func findValidCoupons(sortedFile1, sortedFile2, sortedFile3 string) ([]string, error) {
-    files := [3]*os.File{nil, nil, nil}
-    readers := [3]*bufio.Reader{nil, nil, nil}
-    scanners := [3]*bufio.Scanner{nil, nil, nil}
-    currentCodes := [3]string{"", "", ""} // Store current code from each file
-    hasMore := [3]bool{true, true, true} // Tracks if each file still has lines
-    var setupErr error
-
-    // Defer closing all files that are successfully opened
-    defer func() {
-        for i := 0; i < 3; i++ {
-            if files[i] != nil {
-                files[i].Close()
-            }
-        }
-    }()
-
-    // Open files and initialize scanners
-    filePaths := [3]string{sortedFile1, sortedFile2, sortedFile3}
-    for i := 0; i < 3; i++ {
-        files[i], setupErr = os.Open(filePaths[i])
-        if setupErr != nil {
-            return nil, fmt.Errorf("error opening sorted file %s: %w", filePaths[i], setupErr)
-        }
-        readers[i] = bufio.NewReader(files[i])
-        scanners[i] = bufio.NewScanner(readers[i])
-        if scanners[i].Scan() {
-            currentCodes[i] = strings.TrimSpace(scanners[i].Text()) // Already trimmed during sort prep, but good for safety
-        } else {
-            hasMore[i] = false // File is empty or only had error
-            if err := scanners[i].Err(); err != nil {
-                 return nil, fmt.Errorf("error reading initial line from sorted file %d (%s): %w", i+1, filePaths[i], err)
-            }
-        }
-    }
-
-    var validCoupons []string // Using dynamic slice; pre-allocation could be a micro-optimization if size is predictable
-
-    for hasMore[0] || hasMore[1] || hasMore[2] { // Continue if at least one file has more lines
-        minCode := ""
-        // Determine the smallest current code among the files that still have lines
-        for i := 0; i < 3; i++ {
-            if hasMore[i] {
-                if minCode == "" || currentCodes[i] < minCode {
-                    minCode = currentCodes[i]
-                }
-            }
-        }
-
-        if minCode == "" { // Should only happen if all files are exhausted
-            break
-        }
-
-        count := 0
-        // Count occurrences of the smallest code
-        for i := 0; i < 3; i++ {
-            if hasMore[i] && currentCodes[i] == minCode {
-                count++
-            }
-        }
-
-        // If the smallest code appears in at least two files, it's valid
-        if count >= 2 {
-            validCoupons = append(validCoupons, minCode)
-        }
-
-        // Advance the scanners for all files that matched the smallest code
-        for i := 0; i < 3; i++ {
-            if hasMore[i] && currentCodes[i] == minCode {
-                if scanners[i].Scan() {
-                    currentCodes[i] = strings.TrimSpace(scanners[i].Text())
-                } else {
-                    hasMore[i] = false // No more lines in this file
-                    if err := scanners[i].Err(); err != nil {
-                        return nil, fmt.Errorf("error reading sorted file %d (%s): %w", i+1, filePaths[i], err)
-                    }
-                }
-            }
-        }
-    }
-    return validCoupons, nil
+type Shard struct {
+	mu sync.Mutex
+	m  map[string]uint32 // Stores uint32 directly for bitmasks
 }
 
+// Shards array for the globally shared bitmask data
+var couponShards [numShards]Shard
 
-// LoadAndFindValidCoupons loads coupon codes from files, identifies valid ones, and populates the CouponStore.
-func (s *CouponStoreConcurrent) LoadAndFindValidCoupons(dir string) error {
-	// This check is now primarily handled by the CouponStoreConcurrentInstance logic with `once.Do`.
-	// If this method were to be called directly multiple times for re-loading, this check would be important.
-	// For the singleton pattern, `loaded` and `loadDir` are managed by `CouponStoreConcurrentInstance`.
-	// However, resetting internal state if a direct reload is intended:
-	// if loaded && loadDir == dir {
-	// 	fmt.Println("CouponStore already loaded and validated from this directory.")
-	// 	return nil
+// Initialize shards (call this once before workers start)
+func initializeShards() {
+	for i := range couponShards {
+		couponShards[i].m = make(map[string]uint32)
+	}
+}
+
+// getShardIndex calculates the shard for a given coupon string.
+// Using FNV-1a hash, common and simple.
+func getShardIndex(couponStr string) uint32 {
+	hasher := fnv.New32a()
+	hasher.Write([]byte(couponStr)) // This allocates a byte slice from string for Write.
+	                               // For extreme performance, a non-allocating hash or maphash could be used.
+	return hasher.Sum32() % numShards
+}
+
+// flushBatchSharded merges a worker's local batch into the sharded global map.
+func flushBatchSharded(workerID int, localBatch map[string]uint32, sds []Shard) { // sds is couponShards
+	if len(localBatch) == 0 {
+		return
+	}
+	// fmt.Printf("[%s] Worker %d: Flushing batch of %d unique coupon strings to sharded map.\n", time.Now().Format(time.RFC3339Nano), workerID, len(localBatch))
+	// startFlush := time.Now()
+
+	for couponStr, batchAggregatedBitmask := range localBatch {
+		if batchAggregatedBitmask == 0 {
+			continue
+		}
+		shardIndex := getShardIndex(couponStr)
+
+		sds[shardIndex].mu.Lock()
+		sds[shardIndex].m[couponStr] |= batchAggregatedBitmask // Bitwise OR under shard lock
+		sds[shardIndex].mu.Unlock()
+	}
+	// flushDuration := time.Since(startFlush)
+	// if flushDuration.Milliseconds() > 100 {
+	// 	fmt.Printf("[%s] Worker %d: Sharded batch flush of %d items took %s.\n", time.Now().Format(time.RFC3339Nano), workerID, len(localBatch), flushDuration)
 	// }
+}
 
-	s.mu.Lock() // Lock before modifying shared state like s.coupons
-	s.coupons = make(map[string]struct{}) // Clear any previous coupons for a fresh load
-	s.mu.Unlock()
-	// 'loaded' and 'loadDir' global vars are set by CouponStoreConcurrentInstance after this function returns.
+// worker function for the worker pool using sharded map
+func workerSharded(workerID int, assumeCleanLines bool, dataChan <-chan couponData, sds []Shard, wg *sync.WaitGroup) {
+	defer wg.Done()
+	// fmt.Printf("[%s] Worker %d (sharded): Started.\n", time.Now().Format(time.RFC3339Nano), workerID)
 
+	localBatchData := make(map[string]uint32)
+	itemsProcessedForCurrentBatch := 0
+	const flushTriggerCount = 8192 // Tunable
 
-	if _, err := os.Stat(dir); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("coupon directory %s does not exist: %w", dir, err)
+	for data := range dataChan {
+		couponStr := data.couponString
+		if !assumeCleanLines {
+			couponStr = strings.TrimSpace(couponStr)
 		}
-		return fmt.Errorf("error accessing coupon directory %s: %w", dir, err)
-	}
 
-	filePaths, err := filepath.Glob(filepath.Join(dir, "*"))
-	if err != nil {
-		return fmt.Errorf("error listing files in directory %s: %w", dir, err)
-	}
+		couponLen := len(couponStr)
+		if couponLen >= 8 && couponLen <= 10 {
+			localBatchData[couponStr] |= data.fileBitmask
+		}
 
-    // Filter out directories from filePaths, only consider regular files
-    var actualFiles []string
-    for _, fp := range filePaths {
-        info, err := os.Stat(fp)
-        if err != nil {
-            // Could log this error or decide how to handle unstat-able paths
-            continue 
-        }
-        if info.Mode().IsRegular() {
-            actualFiles = append(actualFiles, fp)
-        }
-    }
-    filePaths = actualFiles
-
-
-	if len(filePaths) != 3 {
-		return fmt.Errorf("expected 3 coupon files in the directory '%s', found %d regular files", dir, len(filePaths))
-	}
-
-	tempDir, err := os.MkdirTemp("", "coupon_sort_") // Suffix for clarity
-	if err != nil {
-		return fmt.Errorf("error creating temporary directory: %w", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	var sortedFiles [3]string
-	var wg sync.WaitGroup
-	errChan := make(chan error, len(filePaths)) // Buffer for one error per goroutine
-
-	for i, filePath := range filePaths {
-		wg.Add(1)
-		go func(fp string, index int) {
-			defer wg.Done()
-			// Pass the actual file path (fp) to extractAndSort
-			sortedPath, sortErr := extractAndSort(fp, tempDir, index+1)
-			if sortErr != nil {
-				errChan <- fmt.Errorf("failed to extract and sort file %s: %w", fp, sortErr)
-				return
-			}
-			sortedFiles[index] = sortedPath
-		}(filePath, i) // Pass filePath and i to the goroutine
-	}
-
-	wg.Wait()
-	close(errChan) // Close errChan after all goroutines are done
-
-	// Check for errors from goroutines
-	for sortErr := range errChan {
-		if sortErr != nil {
-			return sortErr // Return the first error encountered
+		itemsProcessedForCurrentBatch++
+		if itemsProcessedForCurrentBatch >= flushTriggerCount {
+			flushBatchSharded(workerID, localBatchData, sds) // Pass shards slice
+			localBatchData = make(map[string]uint32)
+			itemsProcessedForCurrentBatch = 0
 		}
 	}
 
-	validCoupons, err := findValidCoupons(sortedFiles[0], sortedFiles[1], sortedFiles[2])
-	if err != nil {
-		return fmt.Errorf("error finding valid coupons from sorted files: %w", err)
+	if len(localBatchData) > 0 {
+		// fmt.Printf("[%s] Worker %d (sharded): Flushing final local batch of %d items.\n", time.Now().Format(time.RFC3339Nano), workerID, len(localBatchData))
+		flushBatchSharded(workerID, localBatchData, sds) // Pass shards slice
 	}
+	// fmt.Printf("[%s] Worker %d (sharded): Exiting.\n", time.Now().Format(time.RFC3339Nano), workerID)
+}
+
+
+// LoadAndFindValidCoupons processes coupon files.
+func (s *CouponStoreConcurrent) LoadAndFindValidCoupons(dir string) (errFinal error) {
+	startTime := time.Now()
+	fmt.Printf("[%s] LoadAndFindValidCoupons: Initiating for directory '%s' (using sharded map).\n", startTime.Format(time.RFC3339Nano), dir)
+	defer func() { /* ... (same defer for timing and panic recovery as before) ... */ 
+		duration := time.Since(startTime)
+		if r := recover(); r != nil {
+			errFinal = fmt.Errorf("recovered panic in LoadAndFindValidCoupons: %v", r)
+			fmt.Printf("[%s] LoadAndFindValidCoupons: CRITICAL PANIC after %s - %v\n", time.Now().Format(time.RFC3339Nano), duration, r)
+		}
+		if errFinal != nil {
+			fmt.Printf("[%s] LoadAndFindValidCoupons: FAILED after %s. Error: %v\n", time.Now().Format(time.RFC3339Nano), duration, errFinal)
+		} else {
+			fmt.Printf("[%s] LoadAndFindValidCoupons: Successfully completed in %s.\n", time.Now().Format(time.RFC3339Nano), duration)
+		}
+	}()
+
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, code := range validCoupons {
-		s.coupons[code] = struct{}{}
+	s.coupons = make(map[string]struct{})
+	s.mu.Unlock()
+
+	// Initialize shards (do this once per application run, or ensure it's safe if called multiple times for tests)
+	// For simplicity in this function, we initialize it here. If LoadAndFindValidCoupons is called multiple times
+	// by different tests without resetting package state, this could be an issue. The singleton `once.Do`
+	// ensures LoadAndFindValidCoupons itself is called once for the instance.
+	initializeShards() // Ensure shard maps are created
+
+	// ... (file path globbing, validation, etc. as before) ...
+	if _, statErr := os.Stat(dir); statErr != nil {
+		if os.IsNotExist(statErr) {return fmt.Errorf("coupon directory '%s' does not exist: %w", dir, statErr)}
+		return fmt.Errorf("error accessing coupon directory '%s': %w", dir, statErr)
 	}
-    // global `loaded` and `loadDir` will be set by the caller `CouponStoreConcurrentInstance`
+	globPaths, globErr := filepath.Glob(filepath.Join(dir, "*"))
+	if globErr != nil {return fmt.Errorf("error listing files in directory '%s': %w", dir, globErr)}
+	var filePaths []string
+	for _, fp := range globPaths {
+		info, statErr := os.Stat(fp)
+		if statErr != nil {
+			fmt.Fprintf(os.Stderr, "[%s] Warning: Could not stat path '%s', skipping: %v\n", time.Now().Format(time.RFC3339Nano), fp, statErr)
+			continue
+		}
+		if info.Mode().IsRegular() {filePaths = append(filePaths, fp)}
+	}
+	if len(filePaths) != 3 {
+		return fmt.Errorf("expected 3 coupon files in directory '%s', found %d regular files: %v", dir, len(filePaths), filePaths)
+	}
+	fmt.Printf("[%s] LoadAndFindValidCoupons: Found %d files to process: %v\n", time.Now().Format(time.RFC3339Nano), len(filePaths), filePaths)
+
+
+	dataChan := make(chan couponData, 2048*len(filePaths)) // Increased buffer slightly
+	var readerWg sync.WaitGroup
+	readerErrChan := make(chan error, len(filePaths))
+	assumeCleanLines := true
+
+	fmt.Printf("[%s] LoadAndFindValidCoupons: Starting %d file reader goroutines (assumeCleanLines=%t)...\n", time.Now().Format(time.RFC3339Nano), len(filePaths), assumeCleanLines)
+	for i, filePath := range filePaths {
+		readerWg.Add(1)
+		go func(fp string, fileIndex int, readerLogIndex int) { // File reader goroutine (same as before)
+			defer readerWg.Done()
+			readerStartTime := time.Now()
+			fileBitmask := uint32(1 << fileIndex)
+			inFile, fileOpenErr := os.Open(fp)
+			if fileOpenErr != nil {
+				errMsg := fmt.Errorf("reader %d failed to open file '%s': %w", readerLogIndex, fp, fileOpenErr)
+				fmt.Fprintln(os.Stderr, "["+time.Now().Format(time.RFC3339Nano)+"] "+errMsg.Error())
+				readerErrChan <- errMsg
+				return
+			}
+			defer inFile.Close()
+			var currentReader io.Reader = inFile
+			if strings.HasSuffix(strings.ToLower(fp), ".gz") {
+				gzReader, gzErr := gzip.NewReader(inFile)
+				if gzErr != nil {
+					errMsg := fmt.Errorf("reader %d failed to create gzip reader for '%s': %w", readerLogIndex, fp, gzErr)
+					fmt.Fprintln(os.Stderr, "["+time.Now().Format(time.RFC3339Nano)+"] "+errMsg.Error())
+					readerErrChan <- errMsg
+					return
+				}
+				defer gzReader.Close()
+				currentReader = gzReader
+			}
+			scanner := bufio.NewScanner(currentReader)
+			lineNum := 0
+			for scanner.Scan() {
+				lineNum++
+				dataChan <- couponData{couponString: scanner.Text(), fileBitmask: fileBitmask}
+			}
+			if scanErr := scanner.Err(); scanErr != nil {
+				fmt.Fprintf(os.Stderr, "[%s] Reader %d (%s): Error during scan (at line ~%d): %v\n", time.Now().Format(time.RFC3339Nano), readerLogIndex, filepath.Base(fp), lineNum, scanErr)
+			}
+			fmt.Printf("[%s] Reader %d (%s): Finished. Processed %d lines in %s.\n", time.Now().Format(time.RFC3339Nano), readerLogIndex, filepath.Base(fp), lineNum, time.Since(readerStartTime))
+		}(filePath, i, i+1)
+	}
+
+	go func() { // Goroutine to close channels once readers are done
+		readerWg.Wait()
+		close(dataChan)
+		close(readerErrChan)
+		fmt.Printf("[%s] LoadAndFindValidCoupons: All file readers completed. dataChan and readerErrChan closed.\n", time.Now().Format(time.RFC3339Nano))
+	}()
+
+	var workerWg sync.WaitGroup
+	numWorkers := runtime.NumCPU()
+	if numWorkers < 2 && runtime.GOMAXPROCS(0) > 1 { numWorkers = 2 } else if numWorkers < 1 { numWorkers = 1 }
+	// if numWorkers > 8 { numWorkers = 8 } // Example cap on workers
+
+	fmt.Printf("[%s] LoadAndFindValidCoupons: Starting %d worker goroutines (batch flush trigger: %d items)...\n", time.Now().Format(time.RFC3339Nano), numWorkers, 8192) // 8192 is flushTriggerCount from worker
+	for i := 0; i < numWorkers; i++ {
+		workerWg.Add(1)
+		go workerSharded(i+1, assumeCleanLines, dataChan, couponShards[:], &workerWg) // Pass slice of shards
+	}
+
+	workerWg.Wait()
+	fmt.Printf("[%s] LoadAndFindValidCoupons: All worker goroutines completed.\n", time.Now().Format(time.RFC3339Nano))
+
+	fmt.Printf("[%s] LoadAndFindValidCoupons: Checking for critical errors from file readers...\n", time.Now().Format(time.RFC3339Nano))
+	for errFromReader := range readerErrChan {
+		if errFromReader != nil {
+			return fmt.Errorf("critical error during file reading phase: %w", errFromReader)
+		}
+	}
+	fmt.Printf("[%s] LoadAndFindValidCoupons: No critical reader errors found.\n", time.Now().Format(time.RFC3339Nano))
+
+	s.mu.Lock() // Lock for final write to s.coupons
+	defer s.mu.Unlock()
+	finalCouponCount := 0
+	globallyUniqueCouponCount := 0
+	fmt.Printf("[%s] LoadAndFindValidCoupons: Populating final coupon store from sharded map (%d shards)...\n", time.Now().Format(time.RFC3339Nano), numShards)
+	
+	iterationStartTime := time.Now()
+	for i := 0; i < numShards; i++ {
+		couponShards[i].mu.Lock() // Lock each shard for reading its map
+		for coupon, mask := range couponShards[i].m {
+			globallyUniqueCouponCount++ // This will count some coupons multiple times if not careful;
+			                            // better to count unique keys only once globally.
+			                            // For now, this counts total entries across all shard maps.
+			if bits.OnesCount32(mask) >= 2 {
+				s.coupons[coupon] = struct{}{}
+				// finalCouponCount++ // This is correctly incremented below from len(s.coupons)
+			}
+		}
+		couponShards[i].mu.Unlock()
+	}
+	finalCouponCount = len(s.coupons) // Get the accurate count after populating
+	// The globallyUniqueCouponCount calculated above by summing len(shard.m) is more accurate.
+	// Let's refine globallyUniqueCouponCount calculation after the loop.
+	// Actually, we can just sum len(shards[i].m) to get an idea of total items stored in shards.
+	var totalItemsInShards int
+	for i := 0; i < numShards; i++ {
+		couponShards[i].mu.Lock()
+		totalItemsInShards += len(couponShards[i].m)
+		couponShards[i].mu.Unlock()
+	}
+
+	fmt.Printf("[%s] LoadAndFindValidCoupons: Iterated sharded map (approx. %d total items) in %s.\n", time.Now().Format(time.RFC3339Nano), totalItemsInShards, time.Since(iterationStartTime))
+	fmt.Printf("[%s] LoadAndFindValidCoupons: Stored %d valid coupons.\n", time.Now().Format(time.RFC3339Nano), finalCouponCount)
 	return nil
 }
 
-// GetCoupon checks if a coupon code exists.
+// GetCoupon method remains the same
 func (s *CouponStoreConcurrent) GetCoupon(code string) bool {
+	codeLen := len(code)
+	if codeLen < 8 || codeLen > 10 {return false}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	_, exists := s.coupons[code]
 	return exists
-}
-
-// Helper function to get the number of CPUs to use for parallel operations.
-// Note: With the refactoring of `extractAndSort`, this function is not directly
-// used in the coupon loading path as it was before (for the internal worker pool).
-// It's kept here in case other parts of the package use it, or for future use.
-// The number of concurrent `extractAndSort` operations is fixed at 3 (one per file).
-func getNumCPU() int {
-	numCPU := runtime.NumCPU()
-	if numCPU > 8 { // limit the number of goroutines for CPU-bound tasks if it were used
-		numCPU = 8
-	}
-    if numCPU <= 0 { // Ensure at least 1
-        numCPU = 1
-    }
-	return numCPU
 }

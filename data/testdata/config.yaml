@@ -1,0 +1,13 @@
+server:
+  port: ":8081"
+  read_timeout: 30s
+  write_timeout: 30s
+  idle_timeout: 120s
+
+files:
+  products_file: "/Users/ravibandhu/personal/go/oolio-food-ordering/data/testdata/products.json"
+  coupons_dir: "/Users/ravibandhu/personal/go/oolio-food-ordering/data/testdata"
+
+logging:
+  level: "info"
+  format: "text" 
