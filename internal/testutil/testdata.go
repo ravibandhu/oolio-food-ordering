@@ -108,10 +108,10 @@ func SetupTestData(t *testing.T) *TestData {
 // GetTestProduct returns a test product with valid data
 func GetTestProduct() *models.Product {
 	return &models.Product{
-		ID:          "test-prod-1",
-		Name:        "Test Product",
-		Price:       9.99,
-		Category:    "Test Category",
+		ID:       "test-prod-1",
+		Name:     "Test Product",
+		Price:    9.99,
+		Category: "Test Category",
 		Image: &models.ProductImage{
 			Thumbnail: "https://example.com/images/test-thumb.jpg",
 			Mobile:    "https://example.com/images/test-mobile.jpg",
